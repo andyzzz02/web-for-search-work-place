@@ -1,0 +1,131 @@
+from flask import Flask, render_template, request, redirect, url_for
+import sqlite3
+
+app = Flask(__name__)
+
+# Пароль для доступа в админку (измени на свой)
+ADMIN_PASSWORD = "admin123"
+
+# Функция подключения к базе данных
+def get_db():
+    conn = sqlite3.connect('practice.db')
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# Главная страница (список вакансий с фильтрами)
+@app.route('/')
+def index():
+    filter_course = request.args.get('course', '')
+    filter_direction = request.args.get('direction', '')
+    search_query = request.args.get('search', '')
+    
+    conn = get_db()
+    query = "SELECT * FROM vacancies WHERE 1=1"
+    params = []
+    
+    if filter_course:
+        query += " AND course LIKE ?"
+        params.append(f'%{filter_course}%')
+    
+    if filter_direction:
+        query += " AND direction = ?"
+        params.append(filter_direction)
+    
+    if search_query:
+        query += " AND (company LIKE ? OR title LIKE ?)"
+        params.append(f'%{search_query}%')
+        params.append(f'%{search_query}%')
+    
+    query += " ORDER BY created_at DESC"
+    
+    vacancies = conn.execute(query, params).fetchall()
+    conn.close()
+    
+    conn = get_db()
+    directions = conn.execute("SELECT DISTINCT direction FROM vacancies").fetchall()
+    conn.close()
+    directions_list = [d['direction'] for d in directions]
+    
+    return render_template('index.html', 
+                         vacancies=vacancies, 
+                         filter_course=filter_course,
+                         filter_direction=filter_direction,
+                         search_query=search_query,
+                         directions=directions_list)
+
+# Детальная страница вакансии
+@app.route('/vacancy/<int:id>')
+def vacancy_detail(id):
+    conn = get_db()
+    vacancy = conn.execute("SELECT * FROM vacancies WHERE id = ?", (id,)).fetchone()
+    conn.close()
+    
+    if vacancy is None:
+        return "Вакансия не найдена", 404
+    
+    return render_template('vacancy_detail.html', vacancy=vacancy)
+
+# Админка: добавить новую вакансию (с паролем)
+@app.route('/admin/add', methods=['GET', 'POST'])
+def add_vacancy():
+    # Проверяем пароль из URL
+    password = request.args.get('password', '')
+    
+    # Если пароль неверный — показываем форму входа
+    if password != ADMIN_PASSWORD:
+        return '''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Вход в админку</title>
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+        </head>
+        <body>
+            <div class="container py-5">
+                <div class="row justify-content-center">
+                    <div class="col-md-4">
+                        <div class="card">
+                            <div class="card-header">
+                                <h4>🔐 Вход в админ-панель</h4>
+                            </div>
+                            <div class="card-body">
+                                <form method="GET">
+                                    <div class="mb-3">
+                                        <label class="form-label">Пароль</label>
+                                        <input type="password" name="password" class="form-control" placeholder="Введите пароль" required>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary w-100">Войти</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>
+        '''
+    
+    # Если пароль правильный — обрабатываем POST-запрос
+    if request.method == 'POST':
+        company = request.form['company']
+        title = request.form['title']
+        description = request.form['description']
+        course = request.form['course']
+        direction = request.form['direction']
+        contact = request.form['contact']
+        
+        conn = get_db()
+        conn.execute('''
+            INSERT INTO vacancies (company, title, description, course, direction, contact)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (company, title, description, course, direction, contact))
+        conn.commit()
+        conn.close()
+        
+        return redirect(url_for('index'))
+    
+    return render_template('add_vacancy.html')
+
+if __name__ == '__main__':
+    app.run(debug=True)
